@@ -5,6 +5,9 @@ classdef GroupContribution
         compDescDir = 'data/Compound_Descriptions/'
         initDataDir = 'data/Init_Data/'
 
+        numGroups
+        num_comp
+        
         propMat
         funcMat
         initMat
@@ -27,7 +30,7 @@ classdef GroupContribution
     
     methods
         function obj = GroupContribution(funcName,initName)
-            relDir = 'include/GroupContribution/data';
+            relDir = '../include/GroupContribution/';
             obj.propMat = xlsread(strcat(relDir,obj.solverInputDir,'gani_prop_table.xlsx'));
             obj.funcMat = xlsread(strcat(relDir,obj.compDescDir,funcName,'.xlsx'));
             
@@ -35,8 +38,11 @@ classdef GroupContribution
             obj.x_l_init = (obj.initMat(:,1))';
             obj.x_l_init = obj.x_l_init/sum(obj.x_l_init);
             
-            obj.MW = (1e-3 * obj.funcMat*obj.propMat(10,:)')';
+            obj.numGroups = size(obj.propMat,2);
+            obj.num_comp = size(obj.funcMat,1);
             
+            obj.MW = (1e-3 * obj.funcMat*obj.propMat(10,:)')';
+
             % CALCULATE CRITICAL PROPERTIES
             TcCoVec = obj.propMat(1,:);
             PcCoVec = obj.propMat(2,:);
@@ -67,7 +73,7 @@ classdef GroupContribution
             end
             
             % ENERGY INTERACTION PARAMETER (PSI)
-            a = csvread(strcat(relDir,obj.solverInputDir,'a.csv'));
+            obj.a = csvread(strcat(relDir,obj.solverInputDir,'a.csv'));
             
             % CALCULATE LENNARD-JONES PARAMETERS
             % USING TEE, GOTOH, STEWART
@@ -121,6 +127,106 @@ classdef GroupContribution
             ZcVec = (0.29056 - 0.08775*obj.omegaVec);
             r = (1e-3)*(-0.00435 + ((obj.funcMat*obj.propMat(6,:)'))');
             r = r.*(ZcVec.^phiVec);
+        end
+        
+        % COMPUTE PSatVec
+        % LEE-KESLER SATURATION VAPOR PRESSURE
+        function r = Psat(obj,T)
+            f0 = @(Tr) 5.92714 - 6.09648./Tr - 1.28862*log(Tr) + 0.169347*(Tr.^6);
+            f1 = @(Tr) 15.2518 - 15.6875./Tr - 13.4721*log(Tr) + 0.43577*(Tr.^6);
+            r = obj.PcVec.*exp( f0(T./obj.TcVec) + obj.omegaVec.*f1(T./obj.TcVec) );
+        end
+        
+        function r = Tb(obj,p)
+            f0 = @(Tr) 5.92714 - 6.09648./Tr - 1.28862*log(Tr) + 0.169347*(Tr.^6);
+            f1 = @(Tr) 15.2518 - 15.6875./Tr - 13.4721*log(Tr) + 0.43577*(Tr.^6);
+            r = zeros(1,length(obj.TcVec));
+            T = sym('T');
+            for i = 1:length(obj.TcVec)
+                r(i) = double(vpasolve(obj.PcVec(i).*exp(f0(T./obj.TcVec(i)) + obj.omegaVec(i).*...
+                    f1(T./obj.TcVec(i)) ) == p,T,[250 800]));
+            end
+        end
+
+        function [ ret ] = activity(obj,xVec,T)
+                        
+            % R TABLE
+            R = obj.propMat(11,:);
+            assert(length(R) == obj.numGroups);
+            
+            % Q TABLE
+            Q = obj.propMat(12,:);
+            assert(length(Q) == obj.numGroups);
+            
+            % ENERGY INTERACTION PARAMETER
+            Psi = exp(-obj.a/T);
+            
+            % COORDINATION NUMBER
+            z = 10;
+            
+            % r VECTOR
+            r = (obj.funcMat*R')';
+            
+            % q VECTOR
+            q = (obj.funcMat*Q')';
+            
+            % L VECTOR
+            LVec = (z/2)*(r - q) - (r - 1);
+            
+            % THETA VECTOR
+            thetaVec = xVec.*q/dot(xVec,q);
+            
+            % PHI VECTOR
+            phiVec = xVec.*r/dot(xVec,r);
+            
+            % COMBINATORIAL ACTIVITY
+            gammaCVec = exp(log(phiVec./xVec) + (z/2)*q.*log(thetaVec./phiVec) + LVec ...
+                - (phiVec./xVec)*dot(xVec,LVec));
+            
+            % SET ACTIVITY OF COMPLETELY VAPORIZED SPECIES TO 1
+            gammaCVec(isnan(gammaCVec)) = 1;
+            
+            %------------------------------------------
+            % RESIDUAL ACTIVITY ROUTINE
+            %------------------------------------------
+            
+            % CALCULATE GROUP MOLE FRACTION
+            XVec = xVec*obj.funcMat;
+            XVec = XVec/sum(XVec);
+            
+            % CALCULATE Theta VECTOR
+            ThetaVec = Q.*XVec/dot(Q,XVec);
+            
+            % CALCULATE FUNCTIONAL GROUP AND ISOLATED GAMMAS
+            
+            % AVOID DIVISION-BY-ZERO IN LAST TERM
+            divRes = ThetaVec./(ThetaVec*Psi);
+            divRes(isnan(divRes)) = 0;
+            
+            GammaVec = Q.*(1 - log(ThetaVec*Psi) - divRes*Psi' );
+            GammaIVec = zeros(obj.num_comp,obj.numGroups);
+            
+            % REFER TO IJHMT PAPER FOR DETAILS
+            for i = 1:obj.num_comp
+                XIVec = obj.funcMat(i,:)/sum(obj.funcMat(i,:));
+                ThetaIVec = Q.*XIVec/dot(Q,XIVec);
+                
+                divRes = ThetaIVec./(ThetaIVec*Psi);
+                divRes(isnan(divRes)) = 0;
+                
+                GammaIVec(i,:) = Q.*(1 - log(ThetaIVec*Psi) - divRes*Psi' );
+                
+            end
+            
+            % RESIDUAL ACTIVITY
+            gammaRVec = zeros(1,obj.num_comp);
+            for i = 1:obj.num_comp
+                gammaRVec(i) = exp( dot( obj.funcMat(i,:) , GammaVec - GammaIVec(i,:)  ) );
+            end
+            
+            % TOTAL ACTIVITY
+            ret = gammaCVec.*gammaRVec;
+            
         end
         
     end
