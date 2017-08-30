@@ -17,6 +17,7 @@ classdef GroupContribution
                 
         PcVec
         TcVec
+        TbVec
         VcVec
         omegaVec
         kappaVec
@@ -29,18 +30,24 @@ classdef GroupContribution
     end
     
     methods
-        function obj = GroupContribution(funcName,initName)
+        function obj = GroupContribution(funcName,varargin)
             relDir = '../include/GroupContribution/';
             obj.propMat = xlsread(strcat(relDir,obj.solverInputDir,'gani_prop_table.xlsx'));
             obj.funcMat = xlsread(strcat(relDir,obj.compDescDir,funcName,'.xlsx'));
             
-            [obj.initMat,~] = xlsread(strcat(relDir,obj.initDataDir,initName,'.xlsx'));
-            obj.x_l_init = (obj.initMat(:,1))';
-            obj.x_l_init = obj.x_l_init/sum(obj.x_l_init);
-            
             obj.numGroups = size(obj.propMat,2);
             obj.num_comp = size(obj.funcMat,1);
             
+            if length(varargin)==1
+                initName = varargin{1};
+                [obj.initMat,~] = xlsread(strcat(relDir,obj.initDataDir,initName,'.xlsx'));
+                 obj.x_l_init = (obj.initMat(:,1))';
+            else
+                obj.x_l_init = ones(1,obj.num_comp);
+            end
+                
+            obj.x_l_init = obj.x_l_init/sum(obj.x_l_init);
+                 
             obj.MW = (1e-3 * obj.funcMat*obj.propMat(10,:)')';
 
             % CALCULATE CRITICAL PROPERTIES
@@ -48,12 +55,16 @@ classdef GroupContribution
             PcCoVec = obj.propMat(2,:);
             VcCoVec = obj.propMat(3,:);
             omegaCoVec = obj.propMat(4,:);
+            TbCoVec = obj.propMat(13,:);
             
             % CALCULATE CRITICAL VOLUME VECTOR
             obj.VcVec = 1e-3*(-0.00435 + ( (obj.funcMat*VcCoVec')' ));
             
             % CALCULATE CRITICAL TEMPERATURE VECTOR
             obj.TcVec = 181.128*log( (obj.funcMat*TcCoVec')' );
+            
+            % CALCULATE ATMOSPHERIC BOILING VECTOR
+            obj.TbVec = 204.359*log( (obj.funcMat*TbCoVec')');
             
             % CALCULATE CRITICAL PRESSURE VECTOR
             obj.PcVec = 1.3705 + ( (obj.funcMat*PcCoVec')' + 0.10022).^(-2);
@@ -138,13 +149,20 @@ classdef GroupContribution
         end
         
         function r = Tb(obj,p)
-            f0 = @(Tr) 5.92714 - 6.09648./Tr - 1.28862*log(Tr) + 0.169347*(Tr.^6);
-            f1 = @(Tr) 15.2518 - 15.6875./Tr - 13.4721*log(Tr) + 0.43577*(Tr.^6);
-            r = zeros(1,length(obj.TcVec));
-            T = sym('T');
-            for i = 1:length(obj.TcVec)
-                r(i) = double(vpasolve(obj.PcVec(i).*exp(f0(T./obj.TcVec(i)) + obj.omegaVec(i).*...
-                    f1(T./obj.TcVec(i)) ) == p,T,[250 800]));
+            % SWITCH TO BOILING VECTOR FOR ATMOSPHERIC PRESSURE
+            if (p >= 1e5 && p <= 1.1e5)
+                disp('Using boiling point correlation');
+                r = obj.TbVec;
+            else
+                
+                f0 = @(Tr) 5.92714 - 6.09648./Tr - 1.28862*log(Tr) + 0.169347*(Tr.^6);
+                f1 = @(Tr) 15.2518 - 15.6875./Tr - 13.4721*log(Tr) + 0.43577*(Tr.^6);
+                r = zeros(1,length(obj.TcVec));
+                T = sym('T');
+                for i = 1:length(obj.TcVec)
+                    r(i) = double(vpasolve(obj.PcVec(i).*exp(f0(T./obj.TcVec(i)) + obj.omegaVec(i).*...
+                        f1(T./obj.TcVec(i)) ) == p,T,[250 800]));
+                end
             end
         end
 
