@@ -35,6 +35,9 @@ classdef GroupContribution
             obj.propMat = xlsread(strcat(relDir,obj.solverInputDir,'gani_prop_table.xlsx'));
             obj.funcMat = xlsread(strcat(relDir,obj.compDescDir,funcName,'.xlsx'));
             
+            % EQUALIZE THEIR SIZES BY PADDING FUNCMAT
+            obj.funcMat(size(obj.propMat,2)) = 0; 
+            
             obj.numGroups = size(obj.propMat,2);
             obj.num_comp = size(obj.funcMat,1);
             
